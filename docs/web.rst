@@ -1,6 +1,10 @@
 ``tornado.web`` --- ``RequestHandler`` and ``Application`` classes
 ==================================================================
 
+.. testsetup::
+
+   from tornado.web import *
+
 .. automodule:: tornado.web
 
    Request handlers
@@ -82,6 +86,7 @@
    .. automethod:: RequestHandler.clear_cookie
    .. automethod:: RequestHandler.clear_all_cookies
    .. automethod:: RequestHandler.get_secure_cookie
+   .. automethod:: RequestHandler.get_secure_cookie_key_version
    .. automethod:: RequestHandler.set_secure_cookie
    .. automethod:: RequestHandler.create_signed_value
    .. autodata:: MIN_SUPPORTED_SIGNED_VALUE_VERSION
@@ -173,6 +178,9 @@
 
          * ``cookie_secret``: Used by `RequestHandler.get_secure_cookie`
            and `.set_secure_cookie` to sign cookies.
+         * ``key_version``: Used by requestHandler `.set_secure_cookie`
+           to sign cookies with a specific key when ``cookie_secret``
+           is a key dictionary.
          * ``login_url``: The `authenticated` decorator will redirect
            to this url if the user is not logged in.  Can be further
            customized by overriding `RequestHandler.get_login_url`

@@ -44,11 +44,13 @@ except ImportError:
 _GC_CYCLE_FINALIZERS = (platform.python_implementation() == 'CPython' and
                         sys.version_info >= (3, 4))
 
+
 class ReturnValueIgnoredError(Exception):
     pass
 
 # This class and associated code in the future object is derived
 # from the Trollius project, a backport of asyncio to Python 2.x - 3.x
+
 
 class _TracebackLogger(object):
     """Helper to log a traceback upon destruction if not cleared.
@@ -289,7 +291,7 @@ class Future(object):
             try:
                 cb(self)
             except Exception:
-                app_log.exception('exception calling callback %r for %r',
+                app_log.exception('Exception in callback %r for %r',
                                   cb, self)
         self._callbacks = None
 
@@ -335,24 +337,42 @@ class DummyExecutor(object):
 dummy_executor = DummyExecutor()
 
 
-def run_on_executor(fn):
+def run_on_executor(*args, **kwargs):
     """Decorator to run a synchronous method asynchronously on an executor.
 
     The decorated method may be called with a ``callback`` keyword
     argument and returns a future.
 
-    This decorator should be used only on methods of objects with attributes
-    ``executor`` and ``io_loop``.
+    The `.IOLoop` and executor to be used are determined by the ``io_loop``
+    and ``executor`` attributes of ``self``. To use different attributes,
+    pass keyword arguments to the decorator::
+
+        @run_on_executor(executor='_thread_pool')
+        def foo(self):
+            pass
+
+    .. versionchanged:: 4.2
+       Added keyword arguments to use alternative attributes.
     """
-    @functools.wraps(fn)
-    def wrapper(self, *args, **kwargs):
-        callback = kwargs.pop("callback", None)
-        future = self.executor.submit(fn, self, *args, **kwargs)
-        if callback:
-            self.io_loop.add_future(future,
-                                    lambda future: callback(future.result()))
-        return future
-    return wrapper
+    def run_on_executor_decorator(fn):
+        executor = kwargs.get("executor", "executor")
+        io_loop = kwargs.get("io_loop", "io_loop")
+        @functools.wraps(fn)
+        def wrapper(self, *args, **kwargs):
+            callback = kwargs.pop("callback", None)
+            future = getattr(self, executor).submit(fn, self, *args, **kwargs)
+            if callback:
+                getattr(self, io_loop).add_future(
+                    future, lambda future: callback(future.result()))
+            return future
+        return wrapper
+    if args and kwargs:
+        raise ValueError("cannot combine positional and keyword args")
+    if len(args) == 1:
+        return run_on_executor_decorator(args[0])
+    elif len(args) != 0:
+        raise ValueError("expected 1 argument, got %d", len(args))
+    return run_on_executor_decorator
 
 
 _NO_RESULT = object()
@@ -377,7 +397,9 @@ def return_future(f):
     wait for the function to complete (perhaps by yielding it in a
     `.gen.engine` function, or passing it to `.IOLoop.add_future`).
 
-    Usage::
+    Usage:
+
+    .. testcode::
 
         @return_future
         def future_func(arg1, arg2, callback):
@@ -388,6 +410,8 @@ def return_future(f):
         def caller(callback):
             yield future_func(arg1, arg2)
             callback()
+
+    ..
 
     Note that ``@return_future`` and ``@gen.engine`` can be applied to the
     same function, provided ``@return_future`` appears first.  However,

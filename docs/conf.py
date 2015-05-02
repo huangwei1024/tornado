@@ -14,6 +14,7 @@ version = release = tornado.version
 extensions = [
     "sphinx.ext.autodoc",
     "sphinx.ext.coverage",
+    "sphinx.ext.doctest",
     "sphinx.ext.extlinks",
     "sphinx.ext.intersphinx",
     "sphinx.ext.viewcode",
@@ -42,7 +43,6 @@ coverage_ignore_classes = [
     "TracebackFuture",
 
     # tornado.gen
-    "Multi",
     "Runner",
 
     # tornado.ioloop
@@ -70,9 +70,6 @@ coverage_ignore_functions = [
     # parse_qs_bytes should probably be documented but it's complicated by
     # having different implementations between py2 and py3.
     "parse_qs_bytes",
-
-    # tornado.gen
-    "multi_future",
 ]
 
 html_favicon = 'favicon.ico'
@@ -95,7 +92,7 @@ extlinks = {
     }
 
 intersphinx_mapping = {
-    'python': ('http://python.readthedocs.org/en/latest/', None),
+    'python': ('https://docs.python.org/3.4/', None),
     }
 
 on_rtd = os.environ.get('READTHEDOCS', None) == 'True'

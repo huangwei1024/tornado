@@ -1,200 +1,233 @@
-What's new in the next release of Tornado
+What's new in the next version of Tornado
 =========================================
 
-In progress
+In Progress
 -----------
-
-Highlights
-~~~~~~~~~~
-
-* If a `.Future` contains an exception but that exception is never
-  examined or re-raised (e.g. by yielding the `.Future`), a stack
-  trace will be logged when the `.Future` is garbage-collected.
-* New class `tornado.gen.WaitIterator` provides a way to iterate
-  over ``Futures`` in the order they resolve.
-* The `tornado.websocket` module now supports compression via the
-  "permessage-deflate" extension.  Override
-  `.WebSocketHandler.get_compression_options` to enable on the server
-  side, and use the ``compression_options`` keyword argument to
-  `.websocket_connect` on the client side.
-* When the appropriate packages are installed, it is possible to yield
-  `asyncio.Future` or Twisted ``Defered`` objects in Tornado coroutines.
 
 Backwards-compatibility notes
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-* `.HTTPServer` now calls ``start_request`` with the correct
-  arguments.  This change is backwards-incompatible, afffecting any
-  application which implemented `.HTTPServerConnectionDelegate` by
-  following the example of `.Application` instead of the documented
-  method signatures.
+* ``SSLIOStream.connect`` and `.IOStream.start_tls` now validate certificates
+  by default.
+* Certificate validation will now use the system CA root certificates instead
+  of ``certifi`` when possible (i.e. Python 2.7.9+ or 3.4+). This includes
+  `.IOStream` and ``simple_httpclient``, but not ``curl_httpclient``.
+* The default SSL configuration has become stricter, using
+  `ssl.create_default_context` where available.
+* The deprecated classes in the `tornado.auth` module, ``GoogleMixin``,
+  ``FacebookMixin``, and ``FriendFeedMixin`` have been removed.
+
+New modules: `tornado.locks` and `tornado.queues`
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+These modules provide classes for coordinating coroutines, merged from
+`Toro <http://toro.readthedocs.org>`_.
+
+To port your code from Toro's queues to Tornado 4.2, import `.Queue`,
+`.PriorityQueue`, or `.LifoQueue` from `tornado.queues` instead of from
+``toro``.
+
+Use `.Queue` instead of Toro's ``JoinableQueue``. In Tornado the methods
+`~.Queue.join` and `~.Queue.task_done` are available on all queues, not on a
+special ``JoinableQueue``.
+
+Tornado queues raise exceptions specific to Tornado instead of reusing
+exceptions from the Python standard library.
+Therefore instead of catching the standard `queue.Empty` exception from
+`.Queue.get_nowait`, catch the special `tornado.queues.QueueEmpty` exception,
+and instead of catching the standard `queue.Full` from `.Queue.get_nowait`,
+catch `tornado.queues.QueueFull`.
+
+To port from Toro's locks to Tornado 4.2, import `.Condition`, `.Event`,
+`.Semaphore`, `.BoundedSemaphore`, or `.Lock` from `tornado.locks`
+instead of from ``toro``.
+
+Toro's ``Semaphore.wait`` allowed a coroutine to wait for the semaphore to
+be unlocked *without* acquiring it. This encouraged unorthodox patterns; in
+Tornado, just use `~.Semaphore.acquire`.
+
+Toro's ``Event.wait`` raised a ``Timeout`` exception after a timeout. In
+Tornado, `.Event.wait` raises `tornado.gen.TimeoutError`.
+
+Toro's ``Condition.wait`` also raised ``Timeout``, but in Tornado, the `.Future`
+returned by `.Condition.wait` resolves to False after a timeout::
+
+    @gen.coroutine
+    def await_notification():
+        if not (yield condition.wait(timeout=timedelta(seconds=1))):
+            print('timed out')
+        else:
+            print('condition is true')
+
+In lock and queue methods, wherever Toro accepted ``deadline`` as a keyword
+argument, Tornado names the argument ``timeout`` instead.
+
+Toro's ``AsyncResult`` is not merged into Tornado, nor its exceptions
+``NotReady`` and ``AlreadySet``. Use a `.Future` instead. If you wrote code like
+this::
+
+    from tornado import gen
+    import toro
+
+    result = toro.AsyncResult()
+
+    @gen.coroutine
+    def setter():
+        result.set(1)
+
+    @gen.coroutine
+    def getter():
+        value = yield result.get()
+        print(value)  # Prints "1".
+
+Then the Tornado equivalent is::
+
+    from tornado import gen
+    from tornado.concurrent import Future
+
+    result = Future()
+
+    @gen.coroutine
+    def setter():
+        result.set_result(1)
+
+    @gen.coroutine
+    def getter():
+        value = yield result
+        print(value)  # Prints "1".
+
+`tornado.autoreload`
+~~~~~~~~~~~~~~~~~~~~
+
+* Improved compatibility with Windows.
+* Fixed a bug in Python 3 if a module was imported during a reload check.
 
 `tornado.concurrent`
 ~~~~~~~~~~~~~~~~~~~~
 
-* If a `.Future` contains an exception but that exception is never
-  examined or re-raised (e.g. by yielding the `.Future`), a stack
-  trace will be logged when the `.Future` is garbage-collected.
-* `.Future` now catches and logs exceptions in its callbacks.
+* `.run_on_executor` now accepts arguments to control which attributes
+  it uses to find the `.IOLoop` and executor.
 
-``tornado.curl_httpclient``
-~~~~~~~~~~~~~~~~~~~~~~~~~~~
+`tornado.curl_httpclient`
+~~~~~~~~~~~~~~~~~~~~~~~~~
 
-* ``tornado.curl_httpclient`` now supports request bodies for ``PATCH``
-  and custom methods.
-* ``tornado.curl_httpclient`` now supports resubmitting bodies after
-  following redirects for methods other than ``POST``.
-* ``curl_httpclient`` now runs the streaming and header callbacks on
-  the IOLoop.
-* ``tornado.curl_httpclient`` now uses its own logger for debug output
-  so it can be filtered more easily.
+* Fixed a bug that would cause the client to stop processing requests
+  if an exception occurred in certain places while there is a queue.
 
 `tornado.gen`
 ~~~~~~~~~~~~~
 
-* New class `tornado.gen.WaitIterator` provides a way to iterate
-  over ``Futures`` in the order they resolve.
-* When the `~functools.singledispatch` library is available (standard on
-  Python 3.4, available via ``pip install singledispatch`` on older versions),
-  the `.convert_yielded` function can be used to make other kinds of objects
-  yieldable in coroutines.
-* New function `tornado.gen.sleep` is a coroutine-friendly
-  analogue to `time.sleep`.
-* `.gen.engine` now correctly captures the stack context for its callbacks.
+* On Python 3, catching an exception in a coroutine no longer leads to
+  leaks via ``Exception.__context__``.
+* `tornado.gen.Multi` and `tornado.gen.multi_future` (which are used when
+  yielding a list or dict in a coroutine) now log any exceptions after the
+  first if more than one `.Future` fails (previously they would be logged
+  when the `.Future` was garbage-collected, but this is more reliable).
+  Both have a new keyword argument ``quiet_exceptions`` to suppress
+  logging of certain exception types; to use this argument you must
+  call ``Multi`` or ``multi_future`` directly instead of simply yielding
+  a list.
+* `.multi_future` now works when given multiple copies of the same `.Future`.
+* `.WaitIterator` now works even if no hard reference to the iterator itself
+  is kept.
 
 `tornado.httpclient`
 ~~~~~~~~~~~~~~~~~~~~
 
-* `tornado.httpclient.HTTPRequest` accepts a new argument
-  ``raise_error=False`` to suppress the default behavior of raising an
-  error for non-200 response codes.
+* The ``raise_error`` argument now works correctly with the synchronous
+  `.HTTPClient`.
 
 `tornado.httpserver`
 ~~~~~~~~~~~~~~~~~~~~
 
-* `.HTTPServer` now calls ``start_request`` with the correct
-  arguments.  This change is backwards-incompatible, afffecting any
-  application which implemented `.HTTPServerConnectionDelegate` by
-  following the example of `.Application` instead of the documented
-  method signatures.
-* `.HTTPServer` now tolerates extra newlines which are sometimes inserted
-  between requests on keep-alive connections.
-* `.HTTPServer` can now use keep-alive connections after a request
-  with a chunked body.
-* `.HTTPServer` now always reports ``HTTP/1.1`` instead of echoing
-  the request version.
-
-`tornado.httputil`
-~~~~~~~~~~~~~~~~~~
-
-* New function `tornado.httputil.split_host_and_port` for parsing
-  the ``netloc`` portion of URLs.
-* The ``context`` argument to `.HTTPServerRequest` is now optional,
-  and if a context is supplied the ``remote_ip`` attribute is also optional.
-* `.HTTPServerRequest.body` is now always a byte string (previously the default
-  empty body would be a unicode string on python 3).
-* Header parsing now works correctly when newline-like unicode characters
-  are present.
-* Header parsing again supports both CRLF and bare LF line separators.
-* Malformed ``multipart/form-data`` bodies will always be logged
-  quietly instead of raising an unhandled exception; previously
-  the behavior was inconsistent depending on the exact error.
+* `.HTTPServer` is now a subclass of `tornado.util.Configurable`.
 
 `tornado.ioloop`
 ~~~~~~~~~~~~~~~~
 
-* The ``kqueue`` and ``select`` IOLoop implementations now report
-  writeability correctly, fixing flow control in IOStream.
-* When a new `.IOLoop` is created, it automatically becomes "current"
-  for the thread if there is not already a current instance.
-* New method `.PeriodicCallback.is_running` can be used to see
-  whether the `.PeriodicCallback` has been started.
+* `.PeriodicCallback` is now more efficient when the clock jumps forward
+  by a large amount.
+* The `.IOLoop` constructor now has a ``make_current`` keyword argument
+  to control whether the new `.IOLoop` becomes `.IOLoop.current()`.
+* Third-party implementations of `.IOLoop` should accept ``**kwargs``
+  in their `~.IOLoop.initialize` methods and pass them to the superclass
+  implementation.
 
 `tornado.iostream`
 ~~~~~~~~~~~~~~~~~~
 
-* `.IOStream.start_tls` now uses the ``server_hostname`` parameter
-  for certificate validation.
-* `.SSLIOStream` will no longer consume 100% CPU after certain error conditions.
-* `.SSLIOStream` no longer logs ``EBADF`` errors during the handshake as they
-  can result from nmap scans in certain modes.
+* ``SSLIOStream.connect`` and `.IOStream.start_tls` now validate certificates
+  by default.
+* New method `.SSLIOStream.wait_for_handshake` allows server-side applications
+  to wait for the handshake to complete in order to verify client certificates
+  or use NPN/ALPN.
+* The `.Future` returned by ``SSLIOStream.connect`` now resolves after the
+  handshake is complete instead of as soon as the TCP connection is
+  established.
+* Reduced logging of SSL errors.
+* `.BaseIOStream.read_until_close` now works correctly when a
+  ``streaming_callback`` is given but ``callback`` is None (i.e. when
+  it returns a `.Future`)
 
-`tornado.options`
+`tornado.locale`
+~~~~~~~~~~~~~~~~
+
+* New method `.GettextLocale.pgettext` allows additional context to be
+  supplied for gettext translations.
+
+`tornado.log`
+~~~~~~~~~~~~~
+
+* `.define_logging_options` now works correctly when given a non-default
+  ``options`` object.
+
+`tornado.process`
 ~~~~~~~~~~~~~~~~~
 
-* `~tornado.options.parse_config_file` now always decodes the config
-  file as utf8 on Python 3.
-* `tornado.options.define` more accurately finds the module defining the
-  option.
+* New method `.Subprocess.wait_for_exit` is a coroutine-friendly
+  version of `.Subprocess.set_exit_callback`.
 
-``tornado.platform.asyncio``
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+`tornado.simple_httpclient`
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-* It is now possible to yield ``asyncio.Future`` objects in coroutines
-  when the `~functools.singledispatch` library is available and
-  ``tornado.platform.asyncio`` has been imported.
-* New methods `tornado.platform.asyncio.to_tornado_future` and
-  `~tornado.platform.asyncio.to_asyncio_future` convert between
-  the two libraries' `.Future` classes.
-
-``tornado.platform.twisted``
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-* It is now possible to yield ``Deferred`` objects in coroutines
-  when the `~functools.singledispatch` library is available and
-  ``tornado.platform.twisted`` has been imported.
-
-`tornado.tcpclient`
-~~~~~~~~~~~~~~~~~~~
-
-* `.TCPClient` will no longer raise an exception due to an ill-timed
-  timeout.
+* Improved performance on Python 3 by reusing a single `ssl.SSLContext`.
+* New constructor argument ``max_body_size`` controls the maximum response
+  size the client is willing to accept. It may be bigger than
+  ``max_buffer_size`` if ``streaming_callback`` is used.
 
 `tornado.tcpserver`
 ~~~~~~~~~~~~~~~~~~~
 
-* `.TCPServer` no longer ignores its ``read_chunk_size`` argument.
+* `.TCPServer.handle_stream` may be a coroutine (so that any exceptions
+  it raises will be logged).
 
-`tornado.testing`
-~~~~~~~~~~~~~~~~~
+`tornado.util`
+~~~~~~~~~~~~~~
 
-* `.AsyncTestCase` has better support for multiple exceptions. Previously
-  it would silently swallow all but the last; now it raises the first
-  and logs all the rest.
-* `.AsyncTestCase` now cleans up `.Subprocess` state on ``tearDown`` when
-  necessary.
+* `.import_object` now supports unicode strings on Python 2.
+* `.Configurable.initialize` now supports positional arguments.
 
 `tornado.web`
 ~~~~~~~~~~~~~
 
-* The `.asynchronous` decorator now understands `concurrent.futures.Future`
-  in addition to `tornado.concurrent.Future`.
-* `.StaticFileHandler` no longer logs a stack trace if the connection is
-  closed while sending the file.
-* `.RequestHandler.send_error` now supports a ``reason`` keyword
-  argument, similar to `tornado.web.HTTPError`.
-* `.RequestHandler.locale` now has a property setter.
-* `.Application.add_handlers` hostname matching now works correctly with
-  IPv6 literals.
-* Redirects for the `.Application` ``default_host`` setting now match
-  the request protocol instead of redirecting HTTPS to HTTP.
-* Malformed ``_xsrf`` cookies are now ignored instead of causing
-  uncaught exceptions.
-* ``Application.start_request`` now has the same signature as
-  `.HTTPServerConnectionDelegate.start_request`.
+* Passing ``secure=False`` or ``httponly=False`` to
+  `.RequestHandler.set_cookie` now works as expected (previously only the
+  presence of the argument was considered and its value was ignored).
+* Parsing of the ``If-None-Match`` header now follows the RFC and supports
+  weak validators.
+* `.RequestHandler.get_arguments` now requires that its ``strip`` argument
+  be of type bool. This helps prevent errors caused by the slightly dissimilar
+  interfaces between the singular and plural methods.
+* Errors raised in ``_handle_request_exception`` are now logged more reliably.
+* `.RequestHandler.redirect` now works correctly when called from a handler
+  whose path begins with two slashes.
+* Passing messages containing ``%`` characters to `tornado.web.HTTPError`
+  no longer causes broken error messages.
+* Key versioning support for cookie signing. ``cookie_secret`` application
+  setting can now contain a dict of valid keys with version as key. The
+  current signing key then must be specified via ``key_version`` setting.
 
 `tornado.websocket`
 ~~~~~~~~~~~~~~~~~~~
 
-* The `tornado.websocket` module now supports compression via the
-  "permessage-deflate" extension.  Override
-  `.WebSocketHandler.get_compression_options` to enable on the server
-  side, and use the ``compression_options`` keyword argument to
-  `.websocket_connect` on the client side.
-* `.WebSocketHandler` no longer logs stack traces when the connection
-  is closed.
-* `.WebSocketHandler.open` now accepts ``*args, **kw`` for consistency
-  with ``RequestHandler.get`` and related methods.
-* The ``Sec-WebSocket-Version`` header now includes all supported versions.
-* `.websocket_connect` now has a ``on_message_callback`` keyword argument
-  for callback-style use without ``read_message()``.
+* The ``on_close`` method will no longer be called more than once.
