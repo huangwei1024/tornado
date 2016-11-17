@@ -1,6 +1,11 @@
 ``tornado.gen`` --- Simplify asynchronous code
 ==============================================
 
+.. testsetup::
+
+   from tornado.web import *
+   from tornado import gen
+
 .. automodule:: tornado.gen
 
    Decorators
@@ -18,17 +23,19 @@
    .. autofunction:: with_timeout
    .. autoexception:: TimeoutError
 
-   .. autofunction:: maybe_future
-
    .. autofunction:: sleep
 
    .. autodata:: moment
       :annotation:
 
-   .. autofunction:: Task
-
    .. autoclass:: WaitIterator
       :members:
+
+   .. autofunction:: multi
+
+   .. autofunction:: multi_future
+
+   .. autofunction:: Task
 
    .. class:: Arguments
 
@@ -41,13 +48,16 @@
 
    .. autofunction:: convert_yielded
 
+   .. autofunction:: maybe_future
+
    Legacy interface
    ----------------
 
    Before support for `Futures <.Future>` was introduced in Tornado 3.0,
    coroutines used subclasses of `YieldPoint` in their ``yield`` expressions.
    These classes are still supported but should generally not be used
-   except for compatibility with older interfaces.
+   except for compatibility with older interfaces. None of these classes
+   are compatible with native (``await``-based) coroutines.
 
    .. autoclass:: YieldPoint
       :members:
@@ -57,3 +67,5 @@
    .. autoclass:: Wait
 
    .. autoclass:: WaitAll
+
+   .. autoclass:: MultiYieldPoint

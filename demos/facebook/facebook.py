@@ -89,7 +89,7 @@ class AuthLoginHandler(BaseHandler, tornado.auth.FacebookGraphMixin):
             return
         self.authorize_redirect(redirect_uri=my_url,
                                 client_id=self.settings["facebook_api_key"],
-                                extra_params={"scope": "read_stream"})
+                                extra_params={"scope": "user_posts"})
 
     def _on_auth(self, user):
         if not user:
@@ -116,7 +116,7 @@ def main():
         return
     http_server = tornado.httpserver.HTTPServer(Application())
     http_server.listen(options.port)
-    tornado.ioloop.IOLoop.instance().start()
+    tornado.ioloop.IOLoop.current().start()
 
 
 if __name__ == "__main__":
