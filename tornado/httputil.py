@@ -33,33 +33,36 @@ import time
 
 from tornado.escape import native_str, parse_qs_bytes, utf8
 from tornado.log import gen_log
-from tornado.util import ObjectDict
+from tornado.util import ObjectDict, PY3
 
-try:
-    import Cookie  # py2
-except ImportError:
-    import http.cookies as Cookie  # py3
+if PY3:
+    import http.cookies as Cookie
+    from http.client import responses
+    from urllib.parse import urlencode
+else:
+    import Cookie
+    from httplib import responses
+    from urllib import urlencode
 
-try:
-    from httplib import responses  # py2
-except ImportError:
-    from http.client import responses  # py3
 
 # responses is unused in this file, but we re-export it to other files.
 # Reference it so pyflakes doesn't complain.
 responses
 
 try:
-    from urllib import urlencode  # py2
-except ImportError:
-    from urllib.parse import urlencode  # py3
-
-try:
     from ssl import SSLError
 except ImportError:
     # ssl is unavailable on app engine.
-    class SSLError(Exception):
+    class _SSLError(Exception):
         pass
+    # Hack around a mypy limitation. We can't simply put "type: ignore"
+    # on the class definition itself; must go through an assignment.
+    SSLError = _SSLError  # type: ignore
+
+try:
+    import typing
+except ImportError:
+    pass
 
 
 # RFC 7230 section 3.5: a recipient MAY recognize a single LF as a line
@@ -98,7 +101,7 @@ class _NormalizedHeaderCache(dict):
 _normalized_headers = _NormalizedHeaderCache(1000)
 
 
-class HTTPHeaders(dict):
+class HTTPHeaders(collections.MutableMapping):
     """A dictionary that maintains ``Http-Header-Case`` for all keys.
 
     Supports multiple values per key via a pair of new methods,
@@ -127,10 +130,8 @@ class HTTPHeaders(dict):
     Set-Cookie: C=D
     """
     def __init__(self, *args, **kwargs):
-        # Don't pass args or kwargs to dict.__init__, as it will bypass
-        # our __setitem__
-        dict.__init__(self)
-        self._as_list = {}
+        self._dict = {}  # type: typing.Dict[str, str]
+        self._as_list = {}  # type: typing.Dict[str, typing.List[str]]
         self._last_key = None
         if (len(args) == 1 and len(kwargs) == 0 and
                 isinstance(args[0], HTTPHeaders)):
@@ -144,14 +145,13 @@ class HTTPHeaders(dict):
     # new public methods
 
     def add(self, name, value):
+        # type: (str, str) -> None
         """Adds a new value for the given key."""
         norm_name = _normalized_headers[name]
         self._last_key = norm_name
         if norm_name in self:
-            # bypass our override of __setitem__ since it modifies _as_list
-            dict.__setitem__(self, norm_name,
-                             native_str(self[norm_name]) + ',' +
-                             native_str(value))
+            self._dict[norm_name] = (native_str(self[norm_name]) + ',' +
+                                     native_str(value))
             self._as_list[norm_name].append(value)
         else:
             self[norm_name] = value
@@ -162,6 +162,7 @@ class HTTPHeaders(dict):
         return self._as_list.get(norm_name, [])
 
     def get_all(self):
+        # type: () -> typing.Iterable[typing.Tuple[str, str]]
         """Returns an iterable of all (name, value) pairs.
 
         If a header has multiple values, multiple pairs will be
@@ -183,8 +184,7 @@ class HTTPHeaders(dict):
             # continuation of a multi-line header
             new_part = ' ' + line.lstrip()
             self._as_list[self._last_key][-1] += new_part
-            dict.__setitem__(self, self._last_key,
-                             self[self._last_key] + new_part)
+            self._dict[self._last_key] += new_part
         else:
             name, value = line.split(":", 1)
             self.add(name, value.strip())
@@ -203,36 +203,44 @@ class HTTPHeaders(dict):
                 h.parse_line(line)
         return h
 
-    # dict implementation overrides
+    # MutableMapping abstract method implementations.
 
     def __setitem__(self, name, value):
         norm_name = _normalized_headers[name]
-        dict.__setitem__(self, norm_name, value)
+        self._dict[norm_name] = value
         self._as_list[norm_name] = [value]
 
     def __getitem__(self, name):
-        return dict.__getitem__(self, _normalized_headers[name])
+        # type: (str) -> str
+        return self._dict[_normalized_headers[name]]
 
     def __delitem__(self, name):
         norm_name = _normalized_headers[name]
-        dict.__delitem__(self, norm_name)
+        del self._dict[norm_name]
         del self._as_list[norm_name]
 
-    def __contains__(self, name):
-        norm_name = _normalized_headers[name]
-        return dict.__contains__(self, norm_name)
+    def __len__(self):
+        return len(self._dict)
 
-    def get(self, name, default=None):
-        return dict.get(self, _normalized_headers[name], default)
-
-    def update(self, *args, **kwargs):
-        # dict.update bypasses our __setitem__
-        for k, v in dict(*args, **kwargs).items():
-            self[k] = v
+    def __iter__(self):
+        return iter(self._dict)
 
     def copy(self):
-        # default implementation returns dict(self), not the subclass
+        # defined in dict but not in MutableMapping.
         return HTTPHeaders(self)
+
+    # Use our overridden copy method for the copy.copy module.
+    # This makes shallow copies one level deeper, but preserves
+    # the appearance that HTTPHeaders is a single container.
+    __copy__ = copy
+
+    def __str__(self):
+        lines = []
+        for name, value in self.get_all():
+            lines.append("%s: %s\n" % (name, value))
+        return "".join(lines)
+
+    __unicode__ = __str__
 
 
 class HTTPServerRequest(object):
@@ -371,10 +379,18 @@ class HTTPServerRequest(object):
             self._cookies = Cookie.SimpleCookie()
             if "Cookie" in self.headers:
                 try:
-                    self._cookies.load(
-                        native_str(self.headers["Cookie"]))
+                    parsed = parse_cookie(self.headers["Cookie"])
                 except Exception:
-                    self._cookies = {}
+                    pass
+                else:
+                    for k, v in parsed.items():
+                        try:
+                            self._cookies[k] = v
+                        except Exception:
+                            # SimpleCookie imposes some restrictions on keys;
+                            # parse_cookie does not. Discard any cookies
+                            # with disallowed keys.
+                            pass
         return self._cookies
 
     def write(self, chunk, callback=None):
@@ -385,6 +401,8 @@ class HTTPServerRequest(object):
            to write the response.
         """
         assert isinstance(chunk, bytes)
+        assert self.version.startswith("HTTP/1."), \
+            "deprecated interface only supported in HTTP/1.x"
         self.connection.write(chunk, callback=callback)
 
     def finish(self):
@@ -411,15 +429,14 @@ class HTTPServerRequest(object):
     def get_ssl_certificate(self, binary_form=False):
         """Returns the client's SSL certificate, if any.
 
-        To use client certificates, the HTTPServer must have been constructed
-        with cert_reqs set in ssl_options, e.g.::
+        To use client certificates, the HTTPServer's
+        `ssl.SSLContext.verify_mode` field must be set, e.g.::
 
-            server = HTTPServer(app,
-                ssl_options=dict(
-                    certfile="foo.crt",
-                    keyfile="foo.key",
-                    cert_reqs=ssl.CERT_REQUIRED,
-                    ca_certs="cacert.crt"))
+            ssl_ctx = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+            ssl_ctx.load_cert_chain("foo.crt", "foo.key")
+            ssl_ctx.load_verify_locations("cacerts.pem")
+            ssl_ctx.verify_mode = ssl.CERT_REQUIRED
+            server = HTTPServer(app, ssl_options=ssl_ctx)
 
         By default, the return value is a dictionary (or None, if no
         client certificate is present).  If ``binary_form`` is true, a
@@ -748,7 +765,7 @@ def parse_multipart_form_data(boundary, data, arguments, files):
         name = disp_params["name"]
         if disp_params.get("filename"):
             ctype = headers.get("Content-Type", "application/unknown")
-            files.setdefault(name, []).append(HTTPFile(
+            files.setdefault(name, []).append(HTTPFile(  # type: ignore
                 filename=disp_params["filename"], body=value,
                 content_type=ctype))
         else:
@@ -884,6 +901,7 @@ def doctests():
     import doctest
     return doctest.DocTestSuite()
 
+
 def split_host_and_port(netloc):
     """Returns ``(host, port)`` tuple from ``netloc``.
 
@@ -899,3 +917,82 @@ def split_host_and_port(netloc):
         host = netloc
         port = None
     return (host, port)
+
+_OctalPatt = re.compile(r"\\[0-3][0-7][0-7]")
+_QuotePatt = re.compile(r"[\\].")
+_nulljoin = ''.join
+
+def _unquote_cookie(str):
+    """Handle double quotes and escaping in cookie values.
+
+    This method is copied verbatim from the Python 3.5 standard
+    library (http.cookies._unquote) so we don't have to depend on
+    non-public interfaces.
+    """
+    # If there aren't any doublequotes,
+    # then there can't be any special characters.  See RFC 2109.
+    if str is None or len(str) < 2:
+        return str
+    if str[0] != '"' or str[-1] != '"':
+        return str
+
+    # We have to assume that we must decode this string.
+    # Down to work.
+
+    # Remove the "s
+    str = str[1:-1]
+
+    # Check for special sequences.  Examples:
+    #    \012 --> \n
+    #    \"   --> "
+    #
+    i = 0
+    n = len(str)
+    res = []
+    while 0 <= i < n:
+        o_match = _OctalPatt.search(str, i)
+        q_match = _QuotePatt.search(str, i)
+        if not o_match and not q_match:              # Neither matched
+            res.append(str[i:])
+            break
+        # else:
+        j = k = -1
+        if o_match:
+            j = o_match.start(0)
+        if q_match:
+            k = q_match.start(0)
+        if q_match and (not o_match or k < j):     # QuotePatt matched
+            res.append(str[i:k])
+            res.append(str[k+1])
+            i = k + 2
+        else:                                      # OctalPatt matched
+            res.append(str[i:j])
+            res.append(chr(int(str[j+1:j+4], 8)))
+            i = j + 4
+    return _nulljoin(res)
+
+
+def parse_cookie(cookie):
+    """Parse a ``Cookie`` HTTP header into a dict of name/value pairs.
+
+    This function attempts to mimic browser cookie parsing behavior;
+    it specifically does not follow any of the cookie-related RFCs
+    (because browsers don't either).
+
+    The algorithm used is identical to that used by Django version 1.9.10.
+
+    .. versionadded:: 4.4.2
+    """
+    cookiedict = {}
+    for chunk in cookie.split(str(';')):
+        if str('=') in chunk:
+            key, val = chunk.split(str('='), 1)
+        else:
+            # Assume an empty name per
+            # https://bugzilla.mozilla.org/show_bug.cgi?id=169091
+            key, val = str(''), chunk
+        key, val = key.strip(), val.strip()
+        if key or val:
+            # unquote using Python's algorithm.
+            cookiedict[key] = _unquote_cookie(val)
+    return cookiedict

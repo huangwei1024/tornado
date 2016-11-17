@@ -1,7 +1,7 @@
-What's new in the next release of Tornado
-=========================================
+What's new in Tornado 4.1
+=========================
 
-In progress
+Feb 7, 2015
 -----------
 
 Highlights
@@ -24,7 +24,7 @@ Backwards-compatibility notes
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 * `.HTTPServer` now calls ``start_request`` with the correct
-  arguments.  This change is backwards-incompatible, afffecting any
+  arguments.  This change is backwards-incompatible, affecting any
   application which implemented `.HTTPServerConnectionDelegate` by
   following the example of `.Application` instead of the documented
   method signatures.
